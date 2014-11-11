@@ -1,0 +1,6 @@
+args<-commandArgs(T)
+pdf(paste(args[1],".pdf", sep=""))
+t<-read.table(args[1],header=TRUE)
+plot(t$T,t$X842, type="n",xlab="Type",ylab="Per",ylim=c(0,500),main="China Import In 2013")
+lines(t[,1],t[,4],col=4,lty=3)
+dev.off()
