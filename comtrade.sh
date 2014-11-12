@@ -1,8 +1,22 @@
 #!/bin/bash
 
+#=========去表头\选字段\\排序\有效性核对\填零
 function checkdata()
 {
-	awk '$2!~/^[0-9]+$/{print FILENAME "\t line" NR ":" $1 " " $2 " Data validation error\n";exit 1}' $1	
+	tmp=${1}.e
+	sed '1d' ${1} | sed 's/\".*\"/product/g' | sed 's/\/\/.*,[0-9]+,/,5,/g'| awk -F "," '{ print $15 ","$21}' | column -t -s "," > $tmp
+	sort -n $tmp -o $tmp
+#检查金额字段是否为数值,如不是则退出程序
+	awk '
+		$2!~/^[0-9]+$/{
+			print FILENAME "\t line" NR ":" $1 " " $2 " Data validation error\n"
+				exit 1
+		}' $tmp	
+
+#1-99,如某类别缺失,则补全,并把value置0
+	join -a 2 $tmp list > $tmp.tmp
+	awk 'NF==2{print $1" "$2}NF==1{print $1" 0"}' $tmp.tmp >$tmp
+	rm $tmp.tmp
 }
 
 
@@ -13,27 +27,20 @@ function checkdata()
 function trimdata()
 {
 	import=$1_$2_2013
-	sed '1d' ${import}| sed 's/\".*\"/product/g' | sed 's/\/\/.*,[0-9]+,/,5,/g'| awk -F "," '{ print $15 ","$21}' | column -t -s "," > ${import}.i
-	checkdata	${import}.i
-	sort -n ${import}.i -o ${import}.i
-	echo "$1 Import $2 Total:$(awk '{t+=$2}  END {print t}' ${import}.i)"
+	checkdata	${import}
+	echo "$1 Import $2 Total:$(awk '{t+=$2}  END {print t}' ${import}.e)"
 
 	exp=$2_$1_2013
-	sed '1d' ${exp}| sed 's/\".*\"/product/g' | sed 's/\/\/.*,[0-9]+,/,5,/g'| awk -F "," '{ print $15 ","$21}' | column -t -s "," > ${exp}.e
-	checkdata	${exp}.e
-	sort -n ${exp}.e -o ${exp}.e
+	checkdata	${exp}
 	echo "$2 Export $1 Total:`awk '{t+=$2}  END {print t}' ${exp}.e`"
 
-	#数据聚合，同一类别归入同一大类中
-	[ -e ${import}.ic ] && rm ${import}.ic
-	[ -e ${exp}.ec ] && rm ${exp}.ec
-	for c in $(seq 1 9)
-	do
-		cat ${import}.i | grep "^0${c}" | awk -v c=${c} -v t=0 '{t+=$2} END {print c " " t}' >>${import}.ic
-		cat ${exp}.e | grep "^0${c}" | awk -v c=${c} -v t=0 '{t+=$2} END {print c " " t}' >>${exp}.ec
-	done
-	join ${import}.ic ${exp}.ec | awk -v p=${2} 'BEGIN { printf"T\tIm\tEx\t%s\n", p }  $3!=0{p=$2/$3*100; printf"%s\t%s\t%s\t%2.1f\n",$1,$2,$3,p} $3==0{print $1"\t"$2"\t"$3"\t0.0"}' | column -t | tee  ${import}.t
-	rm ${import}.ic ${exp}.ec
+	#数据聚合.合并出口表和进口表,进行百分比计算
+	join ${import}.e ${exp}.e | awk -v parter=${2} '
+	BEGIN { printf"T\tIm\tEx\t%s\n", parter } 
+	$3!=0 { per=$2/$3*100	
+		printf"%s\t%s\t%s\t%d\n",$1,$2,$3,per 
+	} 
+	$3==0 {print $1"\t"$2"\t"$3"\t0"}' | column -t | tee  ${1}.${2}
 	#	ls | egrep '\.[aiec]' | xargs rm
 }
 
@@ -46,9 +53,11 @@ fi
 cset="76 124 156 251 392 410 643 699 826 842"
 re=$1
 od=data
-mkdir -p ${od}				#不存在则创建data目录, 存放原始数据
+mkdir -p ${re}				#不存在则创建data目录, 存放原始数据
+cp list ${re}/
+cd ${re}
 
-cd ${od}
+#seq 1 99 >list
 [ -f ${re} ] && mv ${re} ${re}.old
 
 echo "Download import trade date of ${re}"
@@ -60,6 +69,7 @@ do
 
 	file="${re}_${p}_2013"
 	filex="${p}_${re}_2013"
+	#cc=AG2取两位分类代码 cc=AG1取一位代码,以此类推,最大6位
 	urlim=http://comtrade.un.org/api/get\?freq\=A\&ps\=2013\&r\=${re}\&p\=${p}\&rg\=1\&head=m\&fmt\=csv
 	urlex=http://comtrade.un.org/api/get\?freq\=A\&ps\=2013\&r\=${p}\&p\=${re}\&rg\=2\&head=m\&fmt\=csv
 	echo "Deal ${p}"
@@ -83,20 +93,26 @@ touch ${re}.all
 
 for p in $(echo $cset)
 do
-	file="${re}_${p}_2013"
-	if [ -f ${file} ]
+	if [ -f ${re}.${p} ]
 		then
-		join -a 1 ${file}.t ${re}.all >  tmp
+		join -a 2 ${re}.all ${re}.${p} >  tmp
 		mv tmp ${re}.all
 	fi
 done
 echo "=========================Total Table====================== "
 column -t ${re}.all
-awk '{for(i=1;i<=NF;i=i+3) {printf "%d ",$i};printf "\n"}' ${re}.all |column -t >${re}.p
+
+#将百分比提取出单独成表,以便R使用 (NR <26 只取农业分类部分)
+awk 'NR<26{
+	for(i=1;i<=NF;i=i+3) {
+		printf "%d ",$i
+	}
+	printf "\n"
+}' ${re}.all |column -t >${re}.p
 echo "=========================Total Percent====================== "
 cat ${re}.p
-#R --slave --vanilla --file=../z.R --args ${re}.p > R.out
+R --slave --vanilla --file=../z.R --args ${re} > R.out
 
-#mkdir -p ../output				#存放最终的输出结果
-#cp ${re}.p ../output/
-#echo "------------------Finished"
+mkdir -p ../out				#存放最终的输出结果
+cp ${re}.* ../out/
+echo "------------------Finished"
