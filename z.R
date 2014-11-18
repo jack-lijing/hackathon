@@ -15,7 +15,7 @@ aveline<-function(x){
 #将曲率表生成图像
 getPicture<-function(x)
 {
-	pdf(paste(r,".pdf", sep=""))
+	png(paste(r,".png", sep=""),width=1200, height=700)
 	plot(t$X0,t[[2]], type="n",xlab="Type",ylab="Per",ylim=c(0,200),main=(paste(r, "Import/export ")))
 	len<-length(t)
 	for (i in 2:len){
@@ -29,8 +29,8 @@ getPicture<-function(x)
 args<-commandArgs(T)
 r<-args[1]
 #r<-"china"
-t<-read.table(paste(r,"_p",sep="" ),header=TRUE)
+t<-read.table(paste(r,"p",sep="" ),header=TRUE)
 t$ave<-aveline(r)
-write.table(t,paste(r,"_p",sep=""),row.names=F)
+write.table(t,paste(r,"p",sep=""),row.names=F)
 getPicture(t)
 #browser()

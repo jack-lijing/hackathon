@@ -1,35 +1,28 @@
 #!/bin/bash
 
-#cset="76 124"			#贸易国参数集合
-cset="76 124 156 251 392 410 643 699 826 842"
-re=$1
-ti=$2
-HOME=`pwd`
-otop="data"
-ypath=$HOME/$otop/$re/$ti
-
-filed=${re}_${ti}
-filea=${re}_${ti}
-filep=${re}_${ti}_p
-
-#=========去表头\选字段\\排序\有效性核对\填零
+#=========去表头\选字段\\排序\有效性核对  如果金融字段不为数字,则退出脚本
+#输入参数:原始下载文件名    输出:输出.e 文件
 function checkdata()
 {
 	tmp=${1}.e
-	sed '1d' ${1} | sed 's/\".*\"/product/g' | sed 's/\/\/.*,[0-9]+,/,5,/g'| awk -F "," '{ printf "%d %s\n",$15,$21}' | column -t -s "," > $tmp
+	sed '1d' ${1} | sed 's/"[^"]*"/product/g' | sed 's/\/\/.*,[0-9]+,/,5,/g'| awk -F "," '{ printf "%d %s\n",$15,$21}' | column -t -s "," > $tmp
 	sort -n $tmp -o $tmp
-#检查金额字段是否为数值,如不是则退出程序
+		#检查金额字段是否为数值,如不是则退出程序
 	awk '
 		$2!~/^[0-9]+$/{
 			print FILENAME "\t line" NR ":" $1 " " $2 " Data validation error\n"
 				exit 1
 		}' $tmp	
+}
 
-#1-99,如某类别缺失,则补全,并把value置0
-#seq 1 99 >list
-	seq 1 99 | join -a 2 $tmp - > $tmp.tmp
-	awk 'NF==2{print $1" "$2}NF==1{print $1" 0"}' $tmp.tmp >$tmp
-	rm $tmp.tmp
+#输入经过checkdata处理的文件,补全1-99分类
+function fillzero()
+{
+
+	#1-99,如某类别缺失,则补全,并把value置0
+	seq 1 99 | join -a 2 $1 - > ${1}.tmp
+	awk 'NF==2{print $1" "$2}NF==1{print $1" 0"}' ${1}.tmp >$1
+	rm ${1}.tmp
 }
 
 
@@ -37,14 +30,17 @@ function checkdata()
 #	Parameter:$1 report 
 #	Parameter:$2 parter
 # 函数生成report和parter之间的Import/Export%的表单  $1_$2_2013.t
+#输出: re.pt文件
 function trimdata()
 {
 	import=$1_$2
 	checkdata	${import}
+	fillzero	${import}.e		
 	echo "$1 Import $2 Total:$(awk '{t+=$2}  END {print t}' ${import}.e)"
 
 	exp=$2_$1
 	checkdata	${exp}
+	fillzero	${exp}.e		
 	echo "$2 Export $1 Total:`awk '{t+=$2}  END {print t}' ${exp}.e`"
 
 	#数据聚合.合并出口表和进口表,进行百分比计算
@@ -58,33 +54,25 @@ function trimdata()
 	#	ls | egrep '\.[aiec]' | xargs rm
 }
 
-#__________________________________Programme Start Here
-if [ 2 != $# ]; then
-	echo "Usage $0 country time"
-	exit	1
-fi
-
-
-#[ -f ${re} ] && mv ${re} ${re}.old
-
-echo "Download import trade date of ${re}"
-for p in $(echo $cset)
-do
-#	if [ ${re} == ${p} ] ; then
-#			continue
-#	fi
-	target=${HOME}/${otop}/${re}/${ti}/${p}
+#如果本地不存在数据文本,则下载 参数一:re	参数二:pt	参数三:time
+function download()
+{
+	local re=$1
+	local p=$2
+	local ti=$3
+	local target=${HOME}/${otop}/${re}/${ti}/${p}
 	mkdir -p ${target}
 	cd ${target}
-	file="${re}_${p}"
-	filex="${p}_${re}"
+	local file="${re}_${p}"
+	local filex="${p}_${re}"
 	#cc=AG2取两位分类代码 cc=AG1取一位代码,以此类推,最大6位
-	urlim=http://comtrade.un.org/api/get\?freq\=A\&ps\=${ti}\&r\=${re}\&p\=${p}\&rg\=1\&head=m\&fmt\=csv
-	urlex=http://comtrade.un.org/api/get\?freq\=A\&ps\=${ti}\&r\=${p}\&p\=${re}\&rg\=2\&head=m\&fmt\=csv
-	echo "Deal ${p} $ti"
+	local urlim=http://comtrade.un.org/api/get\?freq\=A\&ps\=${ti}\&r\=${re}\&p\=${p}\&rg\=1\&head=m\&fmt\=csv
+	local urlex=http://comtrade.un.org/api/get\?freq\=A\&ps\=${ti}\&r\=${p}\&p\=${re}\&rg\=2\&head=m\&fmt\=csv
+	echo "=============Deal ${p} ${ti}"
+	sleep 2
 	if [ -f ${file} ] && [ -f ${filex} ]
 	then
-		echo "Data file exist"
+		echo " local Data file exist"
 	else
 		sleep 2
 		echo "Import $urlim"
@@ -92,40 +80,123 @@ do
 		sleep 2
 		echo "Export $urlex"
 		curl ${urlex} -o ${filex}
-	fi	
-	trimdata  ${re} ${p} 
-	cd -
-done
-
-#将某国对各国进出口数据整合成总表
-cd ${HOME}/${otop}
-[ -f ${filea} ] && rm ${filea}
-touch ${filea}
-
-for p in $(echo $cset)
-do
-	if [ -f ${ypath}/${p}/${re}.${p} ]
-		then
-		join -a 2 ${filea} ${ypath}/${p}/${re}.${p} >  tmp
-		mv tmp ${filea}
 	fi
-done
-echo "=========================Total Table====================== "
-column -t ${filea}
+}
 
-sed -i '26,$d' $filea
+##
+#获取re国家year 的 parter 列表
+function getparter()
+{
+	re=$1
+	year=$2
+	url="http://comtrade.un.org/api/get?freq=A&ps=${year}&r=${re}&p=all&rg=1&fmt=csv"
+#rm parter_o parter
+	echo ">>>>>>>>>>>Download Parter ${year} : ${url} >>>>>>>>>>>>>"
+	if [ -f ${ypath}/parter ] ;then
+		echo "local file exit"
+	else
+		curl ${url} -o parter
+		sed '1d' parter | sed 's/"[^"]*"/product/g' | sed 's/\/\/.*,[0-9]+,/,5,/g'| awk -F "," '{ printf "%d %s\n",$12,$21}' | column -t -s "," | sort -n -k 2 -r | awk '{print $1}' | grep -v '^0' | head -n 10 | sort -n | uniq >  parter
+	fi
+	cat parter
+	sleep 2
+}
 
-#将百分比提取出单独成表,以便R使用 (NR <26 只取农业分类部分)
-awk 'NR<26{
-	for(i=1;i<=NF;i=i+3) {
-		printf "%d ",$i
+##获取re某年的parter数据
+#输入参数:re  year
+function getyear()
+{
+	local pt;
+	local year=$2
+	echo "Download import trade date of ${re} in ${year}"
+	for pt in $cset
+	do
+		if [ ${re} == ${pt} ] ; then
+			continue
+		fi
+		download ${re} ${pt} ${year}
+		trimdata  ${re} ${pt} 
+		cd -
+	done
+}
+
+#######################################################################
+#__________________________________Programme Start Here
+if [ 2 != $# ]; then
+	echo "Usage $0 country time"
+	exit	1
+fi
+re=$1
+ti=$2
+HOME=`pwd`
+otop="data"
+rpath=${HOME}/${otop}/${re}
+
+filea=${re}_a
+filep=${re}_ap
+
+if [ $ti = "recent" ]
+then
+	yset="2013 2012 2011 2010 2009"
+else
+	yset=$ti	
+fi
+
+for year in $yset
+do
+	ypath=$HOME/$otop/$re/$year
+	mkdir -p ${ypath}
+	cd ${ypath}
+	getparter ${re} ${year}
+	cset=$(cat ${ypath}/parter)
+	getyear ${re} ${year}
+	
+	#将某国对各国进出口数据整合成总表
+	echo "======  Single Parter Finish, let Join them together ================"
+	sleep 2
+	cd ${ypath}
+	[ -f ${filea} ] && rm ${filea}
+	touch ${filea}
+
+	for pt in $(echo $cset)
+	{
+		ptpath=${ypath}/$pt
+		if [ -f ${ptpath}/${re}.${pt} ]
+			then
+			join -a 2 ${filea} ${ptpath}/${re}.${pt} >  tmp
+			mv tmp ${filea}
+		fi
 	}
-	printf "\n"
-}' ${filea} |column -t >${filep}
-echo "=========================Total Percent====================== "
-cat ${filep}
-#R --slave --vanilla --file=../z.R --args ${re} > R.out
-#cd ${HOME}/$otop
-R --vanilla --file=${HOME}/z.R --args ${filea} $filep 
+	echo "===================Generating  ${re} in ${year} Total Table====================== "
 
-echo "------------------Finished"
+	#将百分比提取出单独成表,以便R使用 (NR <26 只取农业分类部分)
+	sed -i '26,$d' $filea
+	awk 'NR<26{
+		for(i=1;i<=NF;i=i+3) {
+			printf "%d ",$i
+			}
+			printf "\n"
+		}' ${filea} |column -t >${filep}
+	echo "====================${re} in ${year} Total Percent table====================== "
+	cat ${filep}
+	#R --slave --vanilla --file=../z.R --args ${re} > R.out
+	cd ${ypath}
+	R --slave --vanilla --file=${HOME}/z.R --args ${filea}
+
+	echo "===============================${year} Finished==========================="
+done
+
+
+if [ ${ti} = "recent" ]
+then
+      	echo "=========================Generating Years Average Picture==========================="
+	recent=years
+	[ -f ${recent} ] && rm ${recent}
+	touch ${recent}
+	for year in $yset
+	do
+		ypath=${rpath}/${year}
+		awk '{print $1" "$NF}' ${ypath}/${re}_ap >${re}_rp
+		join -a 2 ${recent} ${re}_rp >${recent}
+	done
+fi
