@@ -1,5 +1,41 @@
 #!/bin/bash
 
+##	根据pt代码获取pt全名, 并替换{fileap}表头
+function getptname()
+{
+         printf "类别 " > head
+         for pt in $cset
+         do
+                 grep  "^$pt:" ${HOME}/country | awk -F ":" '{printf "%s ",$2 }' >> head
+         done
+         echo "平均%" >> head
+
+	 tmp=`mktemp` 
+	 sed '/ave/r head' ${ypath}/${filep} | sed '/ave/d' | tee ${tmp}
+	 cp ${tmp} ${ypath}/${filep}
+	 rm head
+}
+
+##
+#获取re国家year 的 parter 列表
+function getparter()
+{
+	re=$1
+	year=$2
+	url="http://comtrade.un.org/api/get?freq=A&ps=${year}&r=${re}&p=all&rg=1&fmt=csv"
+#rm parter_o parter
+	echo ">>>>>>>>>>>Download Parter ${year} : ${url} >>>>>>>>>>>>>"
+	if [ -f ${ypath}/parter.tmp ] ;then
+		echo "local file exit"
+	else
+		curl ${url} -o parter.tmp
+		sed '1d' parter.tmp | sed 's/"[^"]*"/product/g' | sed 's/\/\/.*,[0-9]+,/,5,/g'| awk -F "," '{ printf "%d %s\n",$12,$21}' | column -t -s "," | sort -n -k 2 -r | awk '{print $1}' | grep -v '^0' | head -n 8 | sort -n | uniq >  parter
+	fi
+#rm parter.tmp
+	sleep 2
+}
+
+
 #=========去表头\选字段\\排序\有效性核对  如果金融字段不为数字,则退出脚本
 #输入参数:原始下载文件名    输出:输出.e 文件
 function checkdata()
@@ -68,39 +104,21 @@ function download()
 	#cc=AG2取两位分类代码 cc=AG1取一位代码,以此类推,最大6位
 	local urlim=http://comtrade.un.org/api/get\?freq\=A\&ps\=${ti}\&r\=${re}\&p\=${p}\&rg\=1\&head=m\&fmt\=csv
 	local urlex=http://comtrade.un.org/api/get\?freq\=A\&ps\=${ti}\&r\=${p}\&p\=${re}\&rg\=2\&head=m\&fmt\=csv
-	echo "=============Deal ${p} ${ti}"
+	echo "=============Deal ${p} ${ti}================"
 	sleep 2
 	if [ -f ${file} ] && [ -f ${filex} ]
 	then
 		echo " local Data file exist"
 	else
-		sleep 2
+		sleep 1
 		echo "Import $urlim"
 		curl ${urlim} -o ${file}
-		sleep 2
+		sleep 1
 		echo "Export $urlex"
 		curl ${urlex} -o ${filex}
 	fi
 }
 
-##
-#获取re国家year 的 parter 列表
-function getparter()
-{
-	re=$1
-	year=$2
-	url="http://comtrade.un.org/api/get?freq=A&ps=${year}&r=${re}&p=all&rg=1&fmt=csv"
-#rm parter_o parter
-	echo ">>>>>>>>>>>Download Parter ${year} : ${url} >>>>>>>>>>>>>"
-	if [ -f ${ypath}/parter ] ;then
-		echo "local file exit"
-	else
-		curl ${url} -o parter
-		sed '1d' parter | sed 's/"[^"]*"/product/g' | sed 's/\/\/.*,[0-9]+,/,5,/g'| awk -F "," '{ printf "%d %s\n",$12,$21}' | column -t -s "," | sort -n -k 2 -r | awk '{print $1}' | grep -v '^0' | head -n 10 | sort -n | uniq >  parter
-	fi
-	cat parter
-	sleep 2
-}
 
 ##获取re某年的parter数据
 #输入参数:re  year
@@ -123,7 +141,9 @@ function getyear()
 #######################################################################
 #__________________________________Programme Start Here
 if [ 2 != $# ]; then
-	echo "Usage $0 country time"
+	echo "Usage:$0 country year"
+	echo "参数一:country 使用贸易国代码 "
+	echo "参数二:year 使用年份(如2012),同时支持recent选项,表示最近五年"
 	exit	1
 fi
 re=$1
@@ -132,8 +152,8 @@ HOME=`pwd`
 otop="data"
 rpath=${HOME}/${otop}/${re}
 
-filea=${re}_a
-filep=${re}_ap
+filea=${re}
+filep=${re}_p
 
 if [ $ti = "recent" ]
 then
@@ -177,26 +197,28 @@ do
 			}
 			printf "\n"
 		}' ${filea} |column -t >${filep}
-	echo "====================${re} in ${year} Total Percent table====================== "
-	cat ${filep}
-	#R --slave --vanilla --file=../z.R --args ${re} > R.out
 	cd ${ypath}
-	R --slave --vanilla --file=${HOME}/z.R --args ${filea}
-
-	echo "===============================${year} Finished==========================="
+	R --slave --vanilla --file=${HOME}/z.R --args ${filea} 2
+	getptname
+	column -t ${filep}
+	R --slave --vanilla --file=${HOME}/z.R --args ${filep} 1
+	echo "===============================${year} Finished ==========================="
 done
 
 
 if [ ${ti} = "recent" ]
 then
       	echo "=========================Generating Years Average Picture==========================="
+	cd ${rpath}
 	recent=years
 	[ -f ${recent} ] && rm ${recent}
 	touch ${recent}
 	for year in $yset
 	do
 		ypath=${rpath}/${year}
-		awk '{print $1" "$NF}' ${ypath}/${re}_ap >${re}_rp
-		join -a 2 ${recent} ${re}_rp >${recent}
+		awk -v y=${year} 'BEGIN {print "类别 " y } NR>1{print $1" "$NF}' ${ypath}/${filep} | \
+			 join -a 2 ${recent} - > ${recent}.tmp 
+		mv ${recent}.tmp ${recent}
 	done
+	R --slave --vanilla --file=${HOME}/z.R --args ${recent} 1
 fi
