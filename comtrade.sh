@@ -8,12 +8,12 @@ function getptname()
          do
                  grep  "^$pt:" ${HOME}/country | awk -F ":" '{printf "%s ",$2 }' >> head
          done
-         echo "平均%" >> head
+         echo "平均" >> head
 
 	 tmp=`mktemp` 
-	 sed '/ave/r head' ${ypath}/${filep} | sed '/ave/d' | tee ${tmp}
+	 sed '/ave/r head' ${ypath}/${filep} | sed '/ave/d' > ${tmp}
 	 cp ${tmp} ${ypath}/${filep}
-	 rm head
+#rm head
 }
 
 ##
@@ -29,8 +29,9 @@ function getparter()
 		echo "local file exit"
 	else
 		curl ${url} -o parter.tmp
-		sed '1d' parter.tmp | sed 's/"[^"]*"/product/g' | sed 's/\/\/.*,[0-9]+,/,5,/g'| awk -F "," '{ printf "%d %s\n",$12,$21}' | column -t -s "," | sort -n -k 2 -r | awk '{print $1}' | grep -v '^0' | head -n 8 | sort -n | uniq >  parter
+		sed '1d' parter.tmp | sed 's/"[^"]*"/product/g' | sed 's/\/\/.*,[0-9]+,/,5,/g'| awk -F "," '{ printf "%d %s\n",$12,$21}' | column -t -s "," | sort -n -k 2 -r | awk '{print $1 }' | grep -v '^0' | head -n 6 | sort -n | uniq >  parter
 	fi
+	cat parter
 #rm parter.tmp
 	sleep 2
 }
@@ -69,12 +70,12 @@ function fillzero()
 #输出: re.pt文件
 function trimdata()
 {
-	import=$1_$2
+	import=$1_$2_i
 	checkdata	${import}
 	fillzero	${import}.e		
 	echo "$1 Import $2 Total:$(awk '{t+=$2}  END {print t}' ${import}.e)"
 
-	exp=$2_$1
+	exp=$2_$1_e
 	checkdata	${exp}
 	fillzero	${exp}.e		
 	echo "$2 Export $1 Total:`awk '{t+=$2}  END {print t}' ${exp}.e`"
@@ -99,8 +100,8 @@ function download()
 	local target=${HOME}/${otop}/${re}/${ti}/${p}
 	mkdir -p ${target}
 	cd ${target}
-	local file="${re}_${p}"
-	local filex="${p}_${re}"
+	local file="${re}_${p}_i"
+	local filex="${p}_${re}_e"
 	#cc=AG2取两位分类代码 cc=AG1取一位代码,以此类推,最大6位
 	local urlim=http://comtrade.un.org/api/get\?freq\=A\&ps\=${ti}\&r\=${re}\&p\=${p}\&rg\=1\&head=m\&fmt\=csv
 	local urlex=http://comtrade.un.org/api/get\?freq\=A\&ps\=${ti}\&r\=${p}\&p\=${re}\&rg\=2\&head=m\&fmt\=csv
@@ -129,39 +130,18 @@ function getyear()
 	echo "Download import trade date of ${re} in ${year}"
 	for pt in $cset
 	do
-		if [ ${re} == ${pt} ] ; then
-			continue
-		fi
+#	if [ ${re} == ${pt} ] ; then
+#			continue
+#		fi
 		download ${re} ${pt} ${year}
 		trimdata  ${re} ${pt} 
 		cd -
 	done
 }
 
-#######################################################################
-#__________________________________Programme Start Here
-if [ 2 != $# ]; then
-	echo "Usage:$0 country year"
-	echo "参数一:country 使用贸易国代码 "
-	echo "参数二:year 使用年份(如2012),同时支持recent选项,表示最近五年"
-	exit	1
-fi
-re=$1
-ti=$2
-HOME=`pwd`
-otop="data"
-rpath=${HOME}/${otop}/${re}
-
-filea=${re}
-filep=${re}_p
-
-if [ $ti = "recent" ]
-then
-	yset="2013 2012 2011 2010 2009"
-else
-	yset=$ti	
-fi
-
+############  生成指定yset每年的数据表和曲线图###################################
+function genyset()
+{
 for year in $yset
 do
 	ypath=$HOME/$otop/$re/$year
@@ -174,7 +154,7 @@ do
 	#将某国对各国进出口数据整合成总表
 	echo "======  Single Parter Finish, let Join them together ================"
 	sleep 2
-	cd ${ypath}
+	cd ${ypath} > /dev/null
 	[ -f ${filea} ] && rm ${filea}
 	touch ${filea}
 
@@ -193,10 +173,10 @@ do
 	sed -i '26,$d' $filea
 	awk 'NR<26{
 		for(i=1;i<=NF;i=i+3) {
-			printf "%d ",$i
+			printf "%d\t",$i
 			}
 			printf "\n"
-		}' ${filea} |column -t >${filep}
+		}' ${filea}  > ${filep}
 	cd ${ypath}
 	R --slave --vanilla --file=${HOME}/z.R --args ${filea} 2
 	getptname
@@ -204,11 +184,12 @@ do
 	R --slave --vanilla --file=${HOME}/z.R --args ${filep} 1
 	echo "===============================${year} Finished ==========================="
 done
+}
 
-
-if [ ${ti} = "recent" ]
-then
-      	echo "=========================Generating Years Average Picture==========================="
+############生成最近5年的曲线图###################################
+function genfivey()
+{
+      	echo "=========================Generating 2009-2013 Average Picture==========================="
 	cd ${rpath}
 	recent=years
 	[ -f ${recent} ] && rm ${recent}
@@ -216,9 +197,34 @@ then
 	for year in $yset
 	do
 		ypath=${rpath}/${year}
-		awk -v y=${year} 'BEGIN {print "类别 " y } NR>1{print $1" "$NF}' ${ypath}/${filep} | \
-			 join -a 2 ${recent} - > ${recent}.tmp 
+		awk -v y=${year} 'BEGIN {print "类别 " y } NR>1{print $1" "$NF}' ${ypath}/${filep} | join -a 2 ${recent} - > ${recent}.tmp 
 		mv ${recent}.tmp ${recent}
 	done
 	R --slave --vanilla --file=${HOME}/z.R --args ${recent} 1
+}
+#######################################################################
+#__________________________________Programme Start Here
+if [ 2 != $# ]; then
+	echo "Usage:$0 country year"
+	echo "参数一:country 使用贸易国代码 "
+	echo "参数二:year 使用年份(如2012),同时支持recent选项,表示最近五年"
+	exit	1
 fi
+re=$1
+ti=$2
+HOME=`pwd`
+otop="data"
+rpath=${HOME}/${otop}/${re}
+
+filea=${re}_a
+filep=${re}_a_p
+
+if [ $ti = "recent" ]
+then
+	yset="2013 2012 2011 2010 2009"
+	genfivey
+else
+	yset=$ti
+	genyset
+fi
+
