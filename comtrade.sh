@@ -206,6 +206,11 @@ function genfivey()
 #__________________________________Programme Start Here
 if [ 2 != $# ]; then
 	echo "Usage:$0 country year"
+	echo "country: should be the code in country file"
+	echo "year: the data of  you want to deal; 
+	echo "if u use recent, it will graphic the picture of last 5 years of counry, "
+	echo "but u should run for year in 2009 2010 2011 2012 2013; do $0 country year done   first"
+	echo "example:$0 156 2012"
 	echo "参数一:country 使用贸易国代码 "
 	echo "参数二:year 使用年份(如2012),同时支持recent选项,表示最近五年"
 	exit	1
